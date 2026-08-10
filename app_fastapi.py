@@ -316,7 +316,32 @@ app.add_middleware(
 
 def _run_prediction():
     global _latest_prediction, _latest_backtest
-    p = _get_predictor(); pred = p.predict(); bt = p.backtest(start='2024-01-01', end='2026-08-08', cost_bps=4.0); return {'prediction': pred, 'backtest': bt}
+    p = _get_predictor()
+    pred = p.predict()
+    bt = p.backtest(start='2024-01-01', end='2026-08-08', cost_bps=4.0)
+    if isinstance(pred, dict) and isinstance(pred.get('horizons'), dict):
+        h1 = pred['horizons'].get('1') or pred['horizons'].get(1)
+        if h1 is not None and hasattr(h1, '__dict__'):
+            h1 = vars(h1)
+        if h1:
+            pred['direction'] = h1.get('direction') or pred.get('direction')
+            pred['confidence'] = h1.get('confidence') if h1.get('confidence') is not None else pred.get('confidence')
+            pred['bucket_probs'] = h1.get('bucket_probs') or pred.get('bucket_probs')
+            pred['reasons'] = h1.get('reasons') or pred.get('reasons', [])
+            pred['top_features'] = h1.get('top_features') or pred.get('top_features_global') or pred.get('top_features', [])
+            pred['signal_type'] = h1.get('signal_type') or pred.get('signal_type')
+    def _to_dict(x):
+        return vars(x) if hasattr(x, '__dict__') else x
+    bt_summary = {'start': _to_dict(bt).get('start'), 'end': _to_dict(bt).get('end'), 'cost_bps': _to_dict(bt).get('cost_bps'), 'generated_at': _to_dict(bt).get('generated_at')}
+    if isinstance(_to_dict(bt).get('horizons'), dict):
+        bt_summary['horizons'] = {}
+        for h, s in _to_dict(bt)['horizons'].items():
+            sd = _to_dict(s)
+            bt_summary['horizons'][h] = {k: _to_dict(v) if k == 'trades' else v for k, v in sd.items()}
+            bt_summary['horizons'][h].pop('trades', None)
+    else:
+        bt_summary['horizons'] = _to_dict(bt).get('horizons')
+    return {'prediction': pred, 'backtest': bt_summary}
 
 def _get_backtest_summary():
     p = _get_predictor(); return p.backtest(start='2024-01-01', end='2026-08-08', cost_bps=4.0)
