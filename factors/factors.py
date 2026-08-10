@@ -20,7 +20,7 @@ from ta.volume import OnBalanceVolumeIndicator
 @dataclass
 class FactorScore:
     name: str
-    score: float          # ~ -2.0 … +2.0
+    score: float  # ~ -2.0 … +2.0
     raw_value: float
     description: str
     weight: float = 1.0
@@ -46,8 +46,13 @@ def score_momentum(df: pd.DataFrame) -> FactorScore:
             mom += 0.5
         else:
             mom += (rsi - 50) / 50 * 0.35
-    return FactorScore("momentum", _clip(mom), ret5 if not np.isnan(ret5) else 0.0,
-                       f"5d={ret5:.2%} RSI={rsi:.1f}" if not np.isnan(rsi) else "momentum", 1.3)
+    return FactorScore(
+        "momentum",
+        _clip(mom),
+        ret5 if not np.isnan(ret5) else 0.0,
+        f"5d={ret5:.2%} RSI={rsi:.1f}" if not np.isnan(rsi) else "momentum",
+        1.3,
+    )
 
 
 def score_mean_reversion(df: pd.DataFrame) -> FactorScore:
@@ -60,8 +65,13 @@ def score_mean_reversion(df: pd.DataFrame) -> FactorScore:
     mr = -np.tanh(dist20 * 30) * 1.0 - np.tanh(dist50 * 20) * 0.6
     if not np.isnan(pct_b):
         mr += (0.5 - pct_b) * 2.0
-    return FactorScore("mean_reversion", _clip(mr), pct_b if not np.isnan(pct_b) else dist20,
-                       f"%B={pct_b:.2f} dist20={dist20:.2%}" if not np.isnan(pct_b) else "mr", 1.0)
+    return FactorScore(
+        "mean_reversion",
+        _clip(mr),
+        pct_b if not np.isnan(pct_b) else dist20,
+        f"%B={pct_b:.2f} dist20={dist20:.2%}" if not np.isnan(pct_b) else "mr",
+        1.0,
+    )
 
 
 def score_trend(df: pd.DataFrame) -> FactorScore:
@@ -75,16 +85,25 @@ def score_trend(df: pd.DataFrame) -> FactorScore:
     if not np.isnan(ema12) and not np.isnan(ema26):
         trend += 0.5 if ema12 > ema26 else -0.5
     if not np.isnan(adx):
-        trend *= (0.7 + 0.3 * min(adx / 40.0, 1.5))
-    return FactorScore("trend", _clip(trend), hist if not np.isnan(hist) else 0.0,
-                       f"ADX={adx:.1f}" if not np.isnan(adx) else "trend", 1.2)
+        trend *= 0.7 + 0.3 * min(adx / 40.0, 1.5)
+    return FactorScore(
+        "trend",
+        _clip(trend),
+        hist if not np.isnan(hist) else 0.0,
+        f"ADX={adx:.1f}" if not np.isnan(adx) else "trend",
+        1.2,
+    )
 
 
 def score_volatility_regime(df: pd.DataFrame) -> FactorScore:
     atr = AverageTrueRange(df["High"], df["Low"], df["Close"], 14).average_true_range()
     atr_pct_series = atr / df["Close"]
     atr_pct = float(atr_pct_series.iloc[-1])
-    atr_ma = float(atr_pct_series.rolling(50).mean().iloc[-1]) if len(atr_pct_series) > 50 else atr_pct
+    atr_ma = (
+        float(atr_pct_series.rolling(50).mean().iloc[-1])
+        if len(atr_pct_series) > 50
+        else atr_pct
+    )
     rel = atr_pct / atr_ma if atr_ma and not np.isnan(atr_ma) and atr_ma > 0 else 1.0
     score = 0.4 if rel < 0.75 else (-0.8 if rel > 1.4 else 0.0)
     ret = df["Close"].pct_change()
@@ -92,13 +111,20 @@ def score_volatility_regime(df: pd.DataFrame) -> FactorScore:
     vol20 = ret.rolling(20).std().iloc[-1]
     if not np.isnan(vol5) and not np.isnan(vol20) and vol20 > 0 and vol5 < vol20 * 0.7:
         score += 0.3
-    return FactorScore("volatility_regime", _clip(score), float(rel), f"relATR={rel:.2f}", 0.7)
+    return FactorScore(
+        "volatility_regime", _clip(score), float(rel), f"relATR={rel:.2f}", 0.7
+    )
 
 
 def score_volume(df: pd.DataFrame) -> FactorScore:
     vol_sma = df["Volume"].rolling(20).mean().iloc[-1]
     rel_vol = df["Volume"].iloc[-1] / vol_sma if vol_sma else 1.0
-    obv_chg = OnBalanceVolumeIndicator(df["Close"], df["Volume"]).on_balance_volume().pct_change(5).iloc[-1]
+    obv_chg = (
+        OnBalanceVolumeIndicator(df["Close"], df["Volume"])
+        .on_balance_volume()
+        .pct_change(5)
+        .iloc[-1]
+    )
     score = 0.0
     if rel_vol > 1.4:
         ret1 = df["Close"].pct_change(1).iloc[-1]
@@ -112,11 +138,16 @@ def score_volume(df: pd.DataFrame) -> FactorScore:
 
 
 def score_candle(df: pd.DataFrame) -> FactorScore:
-    o, h, l, c = df["Open"].iloc[-1], df["High"].iloc[-1], df["Low"].iloc[-1], df["Close"].iloc[-1]
-    rng = max(h - l, 1e-8)
+    o, hi, lo, c = (
+        df["Open"].iloc[-1],
+        df["High"].iloc[-1],
+        df["Low"].iloc[-1],
+        df["Close"].iloc[-1],
+    )
+    rng = max(hi - lo, 1e-8)
     body_pct = (c - o) / rng
-    upper = (h - max(o, c)) / rng
-    lower = (min(o, c) - l) / rng
+    upper = (hi - max(o, c)) / rng
+    lower = (min(o, c) - lo) / rng
     score = 0.0
     if body_pct > 0.6 and upper < 0.2:
         score += 0.7
@@ -200,7 +231,12 @@ def compute_all_factors(
     regime = detect_regime(g3b)
     for f in factors:
         if regime == "strong_uptrend":
-            if f.name in ("momentum", "trend", "bank_momentum", "bank_relative_strength"):
+            if f.name in (
+                "momentum",
+                "trend",
+                "bank_momentum",
+                "bank_relative_strength",
+            ):
                 f.weight *= 1.35
             if f.name == "mean_reversion":
                 f.weight *= 0.6
@@ -235,6 +271,7 @@ def factors_to_dict(factors: List[FactorScore]) -> Dict[str, float]:
 
 if __name__ == "__main__":
     from data.data_fetcher import fetch_universe, make_proxy_g3b
+
     data = fetch_universe(["D05.SI", "O39.SI", "U11.SI"], period="1y")
     proxy = make_proxy_g3b(data)
     facs = compute_all_factors(proxy, data)

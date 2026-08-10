@@ -9,7 +9,7 @@ Rules are calibrated on pre-2024 data and evaluated out-of-sample on
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
@@ -49,14 +49,26 @@ def build_features(
 
     bb_mean = close.rolling(20).mean()
     bb_std = close.rolling(20).std()
-    df["pct_b"] = (close - (bb_mean - 2 * bb_std)) / ((bb_mean + 2 * bb_std) - (bb_mean - 2 * bb_std))
+    df["pct_b"] = (close - (bb_mean - 2 * bb_std)) / (
+        (bb_mean + 2 * bb_std) - (bb_mean - 2 * bb_std)
+    )
 
     vol_sma = g3b["Volume"].rolling(20).mean()
     df["vol_ratio"] = g3b["Volume"] / vol_sma
 
     df["bank_w"] = bank_weight.reindex(df.index)
 
-    for ticker in ["^STI", "SPY", "QQQ", "DX-Y.NYB", "USDSGD=X", "^VIX", "HG=F", "GC=F", "CL=F"]:
+    for ticker in [
+        "^STI",
+        "SPY",
+        "QQQ",
+        "DX-Y.NYB",
+        "USDSGD=X",
+        "^VIX",
+        "HG=F",
+        "GC=F",
+        "CL=F",
+    ]:
         if ticker in macro:
             df[f"{ticker}_ret1"] = macro[ticker]["Close"].pct_change().reindex(df.index)
 
@@ -87,7 +99,9 @@ def compute_xgb_proba(
     if train_mask.sum() < 100:
         return pd.Series(0.5, index=features.index)
 
-    X_train = df.loc[train_mask, model_cols].replace([np.inf, -np.inf], np.nan).fillna(0)
+    X_train = (
+        df.loc[train_mask, model_cols].replace([np.inf, -np.inf], np.nan).fillna(0)
+    )
     y_train = df.loc[train_mask, "target"].astype(int)
     X_pred = df.loc[valid, model_cols].replace([np.inf, -np.inf], np.nan).fillna(0)
 
@@ -114,28 +128,44 @@ def compute_xgb_proba(
 LONG_RULES = [
     {
         "name": "Vol + Banks + VIX collapse",
-        "conditions": [("vol_ratio", ">", 1.3), ("bank_w", ">", 0.005), ("^VIX_ret1", "<", -0.03)],
+        "conditions": [
+            ("vol_ratio", ">", 1.3),
+            ("bank_w", ">", 0.005),
+            ("^VIX_ret1", "<", -0.03),
+        ],
         "desc": "Volume spike, weighted banks up >0.5%, VIX down >3% → G3B long",
         "accuracy": 0.917,
         "avg_ret": 1.42,
     },
     {
         "name": "G3B dip + banks weak + US up",
-        "conditions": [("ret1", "<", -0.01), ("bank_w", "<", -0.005), ("SPY_ret1", ">", 0.004)],
+        "conditions": [
+            ("ret1", "<", -0.01),
+            ("bank_w", "<", -0.005),
+            ("SPY_ret1", ">", 0.004),
+        ],
         "desc": "G3B down >1% with weighted banks down and SPY up >0.4% → G3B long",
         "accuracy": 0.900,
         "avg_ret": 1.19,
     },
     {
         "name": "Bollinger bottom + US risk-on",
-        "conditions": [("dist20", "<", -0.03), ("SPY_ret1", ">", 0.004), ("^VIX_ret1", "<", -0.03)],
+        "conditions": [
+            ("dist20", "<", -0.03),
+            ("SPY_ret1", ">", 0.004),
+            ("^VIX_ret1", "<", -0.03),
+        ],
         "desc": "G3B >3% below 20-day SMA while SPY rises and VIX falls → G3B long",
         "accuracy": 0.889,
         "avg_ret": 1.08,
     },
     {
         "name": "Local pullback + tech leadership",
-        "conditions": [("ret1", "<", -0.01), ("SPY_ret1", ">", 0.004), ("QQQ_ret1", ">", 0.005)],
+        "conditions": [
+            ("ret1", "<", -0.01),
+            ("SPY_ret1", ">", 0.004),
+            ("QQQ_ret1", ">", 0.005),
+        ],
         "desc": "G3B down >1% with SPY and QQQ both up → G3B long",
         "accuracy": 0.875,
         "avg_ret": 0.97,
@@ -146,21 +176,35 @@ LONG_RULES = [
 SHORT_RULES = [
     {
         "name": "Banks + USD + VIX risk-off",
-        "conditions": [("bank_w", "<", -0.005), ("SPY_ret1", "<", -0.004), ("DX-Y.NYB_ret1", ">", 0.002), ("^VIX_ret1", ">", 0.03)],
+        "conditions": [
+            ("bank_w", "<", -0.005),
+            ("SPY_ret1", "<", -0.004),
+            ("DX-Y.NYB_ret1", ">", 0.002),
+            ("^VIX_ret1", ">", 0.03),
+        ],
         "desc": "Banks down, SPY down, dollar up, VIX spikes → G3B short",
         "accuracy": 0.900,
         "avg_ret": -2.31,
     },
     {
         "name": "USD bid + tech selloff",
-        "conditions": [("bank_w", "<", -0.005), ("DX-Y.NYB_ret1", ">", 0.002), ("^VIX_ret1", ">", 0.03), ("QQQ_ret1", "<", -0.005)],
+        "conditions": [
+            ("bank_w", "<", -0.005),
+            ("DX-Y.NYB_ret1", ">", 0.002),
+            ("^VIX_ret1", ">", 0.03),
+            ("QQQ_ret1", "<", -0.005),
+        ],
         "desc": "Banks down with dollar up, VIX up and QQQ down → G3B short",
         "accuracy": 0.889,
         "avg_ret": -2.14,
     },
     {
         "name": "Oversold banks + tech selloff",
-        "conditions": [("rsi", "<", 35), ("bank_w", "<", -0.005), ("QQQ_ret1", "<", -0.005)],
+        "conditions": [
+            ("rsi", "<", 35),
+            ("bank_w", "<", -0.005),
+            ("QQQ_ret1", "<", -0.005),
+        ],
         "desc": "G3B RSI <35, weighted banks down and QQQ down → G3B short",
         "accuracy": 0.889,
         "avg_ret": -1.87,

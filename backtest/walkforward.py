@@ -37,7 +37,9 @@ class BacktestResult:
     regime_breakdown: Dict[str, float]
 
 
-def build_features_fast(price: pd.DataFrame, banks: Dict[str, pd.DataFrame], step: int = 1) -> Tuple[pd.DataFrame, pd.Series]:
+def build_features_fast(
+    price: pd.DataFrame, banks: Dict[str, pd.DataFrame], step: int = 1
+) -> Tuple[pd.DataFrame, pd.Series]:
     min_hist = 70
     rows, targets, dates = [], [], []
     indices = list(range(min_hist, len(price) - 1, step))
@@ -93,9 +95,17 @@ def walk_forward_backtest(
         Xte, yte = X.iloc[tr_end:te_end], y.iloc[tr_end:te_end]
 
         model = XGBClassifier(
-            n_estimators=120, max_depth=3, learning_rate=0.06,
-            subsample=0.85, colsample_bytree=0.8, min_child_weight=4,
-            reg_alpha=0.15, reg_lambda=1.0, random_state=42, n_jobs=2, verbosity=0,
+            n_estimators=120,
+            max_depth=3,
+            learning_rate=0.06,
+            subsample=0.85,
+            colsample_bytree=0.8,
+            min_child_weight=4,
+            reg_alpha=0.15,
+            reg_lambda=1.0,
+            random_state=42,
+            n_jobs=2,
+            verbosity=0,
         )
         model.fit(Xtr, ytr)
         proba = model.predict_proba(Xte)[:, 1]
@@ -108,23 +118,35 @@ def walk_forward_backtest(
 
         for dt in Xte.index:
             loc = price.index.get_loc(dt)
-            r = (price["Close"].iloc[loc + 1] / price["Close"].iloc[loc] - 1) if loc + 1 < len(price) else 0.0
+            r = (
+                (price["Close"].iloc[loc + 1] / price["Close"].iloc[loc] - 1)
+                if loc + 1 < len(price)
+                else 0.0
+            )
             next_rets.append(r)
 
-    pred_df = pd.DataFrame({
-        "actual": actuals, "pred": preds, "proba": probas, "next_ret": next_rets
-    }, index=pd.DatetimeIndex(dts))
+    pred_df = pd.DataFrame(
+        {"actual": actuals, "pred": preds, "proba": probas, "next_ret": next_rets},
+        index=pd.DatetimeIndex(dts),
+    )
 
-    signal = np.where(pred_df["proba"] >= confidence, 1,
-                      np.where(pred_df["proba"] <= 1 - confidence, -1, 0))
+    signal = np.where(
+        pred_df["proba"] >= confidence,
+        1,
+        np.where(pred_df["proba"] <= 1 - confidence, -1, 0),
+    )
     pred_df["signal"] = signal
     cost = cost_bps / 10000.0
     strat = pred_df["signal"] * pred_df["next_ret"] - np.abs(pred_df["signal"]) * cost
     pred_df["strategy_ret"] = strat
 
     acc = accuracy_score(pred_df["actual"], pred_df["pred"])
-    prec_up = precision_score(pred_df["actual"], pred_df["pred"], pos_label=1, zero_division=0)
-    prec_dn = precision_score(pred_df["actual"], pred_df["pred"], pos_label=0, zero_division=0)
+    prec_up = precision_score(
+        pred_df["actual"], pred_df["pred"], pos_label=1, zero_division=0
+    )
+    prec_dn = precision_score(
+        pred_df["actual"], pred_df["pred"], pos_label=0, zero_division=0
+    )
 
     traded = pred_df[pred_df["signal"] != 0]
     n_trades = len(traded)
@@ -148,16 +170,27 @@ def walk_forward_backtest(
         try:
             loc = price.index.get_loc(dt)
             reg = detect_regime(price.iloc[: loc + 1])
-            regime_rets.setdefault(reg, []).append(float(pred_df.loc[dt, "strategy_ret"]))
+            regime_rets.setdefault(reg, []).append(
+                float(pred_df.loc[dt, "strategy_ret"])
+            )
         except Exception:
             pass
     regime_breakdown = {k: float(np.mean(v)) for k, v in regime_rets.items() if v}
 
     return BacktestResult(
-        accuracy=float(acc), precision_up=float(prec_up), precision_down=float(prec_dn),
-        n_trades=n_trades, hit_rate_after_cost=hit, avg_return_per_trade=avg,
-        sharpe=sharpe, max_drawdown=dd, profit_factor=pf, total_return=total,
-        equity_curve=equity, predictions=pred_df, regime_breakdown=regime_breakdown,
+        accuracy=float(acc),
+        precision_up=float(prec_up),
+        precision_down=float(prec_dn),
+        n_trades=n_trades,
+        hit_rate_after_cost=hit,
+        avg_return_per_trade=avg,
+        sharpe=sharpe,
+        max_drawdown=dd,
+        profit_factor=pf,
+        total_return=total,
+        equity_curve=equity,
+        predictions=pred_df,
+        regime_breakdown=regime_breakdown,
     )
 
 
@@ -172,7 +205,9 @@ def run_backtest(period: str = "2y", confidence: float = 0.55) -> BacktestResult
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
+    )
     res = run_backtest(period="2y", confidence=0.55)
 
     print("\n" + "=" * 60)
@@ -180,7 +215,10 @@ if __name__ == "__main__":
     print("  (Weighted DBS+OCBC+UOB proxy ≈ 57.6% of real G3B)")
     print("=" * 60)
     print(f"  Directional Accuracy        : {res.accuracy:6.1%}")
-    print(f"  Precision UP / DOWN         : {res.precision_up:5.1%} / {res.precision_down:5.1%}")
+    print(
+        f"  Precision UP / DOWN         : {res.precision_up:5.1%} / "
+        f"{res.precision_down:5.1%}"
+    )
     print(f"  Trades taken (high-conviction): {res.n_trades:4d}")
     print(f"  Hit rate after 4 bps cost   : {res.hit_rate_after_cost:6.1%}")
     print(f"  Avg return per trade        : {res.avg_return_per_trade:7.3%}")

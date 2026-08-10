@@ -9,13 +9,14 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import List
 
-import numpy as np
 import pandas as pd
 
 from data.data_fetcher import load_g3b_data, make_bank_weighted_return
-from factors.high_conviction import backtest_high_conviction, build_features, evaluate_high_conviction
+from factors.high_conviction import (
+    backtest_high_conviction,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,9 @@ def run_backtest(
 ) -> HighConvictionBacktestResult:
     """Fetch data and run the high-conviction rule backtest."""
     logger.info("Running high-conviction backtest %s -> %s", start, end)
-    g3b, data = load_g3b_data(period="5y")
+    loaded = load_g3b_data(period="5y")
+    g3b = loaded[0]
+    data = loaded[1]
     if g3b is None or g3b.empty:
         raise RuntimeError("Could not load G3B data")
 
@@ -53,9 +56,15 @@ def run_backtest(
     bank_weight = make_bank_weighted_return(bank_dfs)
 
     # Also need macro dict with proper ticker keys for build_features
-    macro = {t: df for t, df in data.items() if t not in ["G3B.SI", "D05.SI", "O39.SI", "U11.SI"]}
+    macro = {
+        t: df
+        for t, df in data.items()
+        if t not in ["G3B.SI", "D05.SI", "O39.SI", "U11.SI"]
+    }
 
-    result = backtest_high_conviction(g3b, macro, bank_weight, start, end, cost_bps=cost_bps)
+    result = backtest_high_conviction(
+        g3b, macro, bank_weight, start, end, cost_bps=cost_bps
+    )
     return HighConvictionBacktestResult(
         start=result["start"],
         end=result["end"],
@@ -75,7 +84,9 @@ def run_backtest(
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
+    )
     res = run_backtest()
     print("\n" + "=" * 60)
     print("  SGX G3B HIGH-CONVICTION BACKTEST")
