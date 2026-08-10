@@ -17,42 +17,9 @@ if str(ROOT) not in sys.path:
 import gradio as gr
 import numpy as np
 import pandas as pd
-from xgboost import XGBClassifier
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-
-def _base_xgb_direction(features: pd.DataFrame) -> float:
-    """Fallback XGBoost probability for days with no high-conviction rule match."""
-    try:
-        df = features.copy()
-        df["target"] = (df["ret1"].shift(-1) > 0).astype(int)
-        model_cols = [c for c in df.columns if c != "target"]
-        train = df.dropna(subset=model_cols + ["target"])
-        if len(train) < 100:
-            return 0.5
-        X = train[model_cols].replace([np.inf, -np.inf], np.nan).fillna(0)
-        y = train["target"]
-        model = XGBClassifier(
-            n_estimators=120,
-            max_depth=3,
-            learning_rate=0.06,
-            subsample=0.85,
-            colsample_bytree=0.8,
-            min_child_weight=4,
-            reg_alpha=0.15,
-            reg_lambda=1.0,
-            random_state=42,
-            n_jobs=2,
-            verbosity=0,
-        )
-        model.fit(X, y)
-        last = df[model_cols].iloc[[-1]].replace([np.inf, -np.inf], np.nan).fillna(0)
-        return float(model.predict_proba(last)[0, 1])
-    except Exception as exc:
-        logger.warning("Base XGB fallback failed: %s", exc)
-        return 0.5
 
 
 def run_predictor(cost_bps: float = 4.0) -> str:
@@ -60,6 +27,7 @@ def run_predictor(cost_bps: float = 4.0) -> str:
         from data.data_fetcher import load_g3b_data, make_bank_weighted_return
         from factors.high_conviction import (
             build_features,
+            compute_xgb_proba,
             evaluate_high_conviction,
         )
         from backtest.high_conviction_backtest import run_backtest
@@ -73,6 +41,7 @@ def run_predictor(cost_bps: float = 4.0) -> str:
         macro = {t: df for t, df in data.items() if t not in ["G3B.SI", "D05.SI", "O39.SI", "U11.SI"]}
 
         features = build_features(g3b, macro, bank_weight)
+        features["xgb_proba"] = compute_xgb_proba(features, g3b["Close"])
         latest = features.iloc[-1]
         as_of = str(features.index[-1].date())
         last_close = float(g3b["Close"].iloc[-1])
@@ -80,7 +49,7 @@ def run_predictor(cost_bps: float = 4.0) -> str:
         signal = evaluate_high_conviction(latest)
 
         if signal is None:
-            proba = _base_xgb_direction(features)
+            proba = float(latest.get("xgb_proba", 0.5))
             if proba >= 0.6:
                 direction, confidence = "UP", f"{proba:.1%} (base model)"
                 signal_text = "LONG / BASE MODEL"

@@ -19,22 +19,23 @@ The system is therefore built around a **high-conviction rule overlay** that use
 
 | Metric                            | Value    |
 |-----------------------------------|----------|
-| **Directional Accuracy**          | **83.8%** |
-| Long-only accuracy                | 85.0% |
-| Short-only accuracy               | 82.4% |
-| Trades taken (high-conviction)    | 37 |
-| Hit rate after 4 bps cost         | 78.4% |
-| Avg return / trade                | +1.073% |
-| Sharpe (annualised)               | 10.20 |
-| Maximum Drawdown                  | -0.9% |
-| Profit Factor                     | 24.25 |
-| Total Strategy Return             | +47.7% |
+| **Directional Accuracy**          | **88.7%** |
+| Long-only accuracy                | 88.9% |
+| Short-only accuracy               | 88.5% |
+| Trades taken (high-conviction)    | 62 |
+| Hit rate after 4 bps cost         | 82.3% |
+| Avg return / trade                | +0.918% |
+| Sharpe (annualised)               | 10.58 |
+| Maximum Drawdown                  | -0.8% |
+| Profit Factor                     | 24.08 |
+| Total Strategy Return             | +75.2% |
 
-Rules are calibrated on pre-2024 data and evaluated out-of-sample on the requested 2024-2026 window.
+Rules are calibrated on pre-2024 data and evaluated out-of-sample on the requested 2024-2026 window. The engine now combines original macro/technical rules with a small set of hybrid XGBoost + macro confirmations.
 
 ## Features
 - Actual G3B.SI data with bank + macro proxies
 - High-conviction long/short rule overlay
+- Hybrid XGBoost + macro confirmation rules
 - Fallback XGBoost probability for non-trigger days
 - Cost-aware backtest reporting
 - Gradio dashboard with `Run Prediction` button

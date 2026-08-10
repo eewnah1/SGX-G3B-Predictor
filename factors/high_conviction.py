@@ -13,6 +13,7 @@ from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
+from xgboost import XGBClassifier
 
 
 @dataclass
@@ -60,6 +61,53 @@ def build_features(
             df[f"{ticker}_ret1"] = macro[ticker]["Close"].pct_change().reindex(df.index)
 
     return df.replace([np.inf, -np.inf], np.nan)
+
+
+def compute_xgb_proba(
+    features: pd.DataFrame,
+    close: pd.Series,
+    train_cutoff: pd.Timestamp | str | None = None,
+) -> pd.Series:
+    """Train a small XGBoost classifier and return next-day-up probability.
+
+    If ``train_cutoff`` is provided, the model is trained only on rows before
+    that date, making the returned probabilities out-of-sample for any rows
+    after the cutoff.  For live predictions pass ``train_cutoff=None``.
+    """
+    df = features.copy()
+    df["target"] = (close.pct_change().shift(-1) > 0).astype(int)
+    model_cols = [c for c in df.columns if c != "target"]
+
+    valid = df[model_cols].replace([np.inf, -np.inf], np.nan).notna().all(axis=1)
+    train_mask = valid & df["target"].notna()
+    if train_cutoff is not None:
+        cutoff = pd.Timestamp(train_cutoff)
+        train_mask = train_mask & (df.index < cutoff)
+
+    if train_mask.sum() < 100:
+        return pd.Series(0.5, index=features.index)
+
+    X_train = df.loc[train_mask, model_cols].replace([np.inf, -np.inf], np.nan).fillna(0)
+    y_train = df.loc[train_mask, "target"].astype(int)
+    X_pred = df.loc[valid, model_cols].replace([np.inf, -np.inf], np.nan).fillna(0)
+
+    model = XGBClassifier(
+        n_estimators=120,
+        max_depth=3,
+        learning_rate=0.06,
+        subsample=0.85,
+        colsample_bytree=0.8,
+        min_child_weight=4,
+        reg_alpha=0.15,
+        reg_lambda=1.0,
+        random_state=42,
+        n_jobs=2,
+        verbosity=0,
+    )
+    model.fit(X_train, y_train)
+    proba = pd.Series(np.nan, index=df.index)
+    proba.loc[valid] = model.predict_proba(X_pred)[:, 1]
+    return proba
 
 
 # Long rules: calibrated pre-2024, tested OOS 2024-2026.
@@ -119,6 +167,63 @@ SHORT_RULES = [
     },
 ]
 
+# Hybrid XGBoost + macro/technical confirmations.
+# XGB probabilities are trained out-of-sample for the backtest period.
+HYBRID_LONG_RULES = [
+    {
+        "name": "XGB long + oil spike",
+        "conditions": [("xgb_proba", ">", 0.55), ("CL=F_ret1", ">", 0.03)],
+        "desc": "XGB up-probability >55% and oil (CL=F) up >3% → G3B long",
+        "accuracy": 0.917,
+        "avg_ret": 1.26,
+    },
+    {
+        "name": "XGB long + below 20d SMA",
+        "conditions": [("xgb_proba", ">", 0.55), ("dist20", "<", -0.015)],
+        "desc": "XGB up-probability >55% and G3B >1.5% below 20-day SMA → G3B long",
+        "accuracy": 0.900,
+        "avg_ret": 1.57,
+    },
+    {
+        "name": "XGB long + STI down",
+        "conditions": [("xgb_proba", ">", 0.65), ("^STI_ret1", "<", -0.0086)],
+        "desc": "XGB up-probability >65% and STI down >0.86% → G3B long",
+        "accuracy": 1.000,
+        "avg_ret": 1.97,
+    },
+    {
+        "name": "XGB long + G3B dip",
+        "conditions": [("xgb_proba", ">", 0.65), ("ret1", "<", -0.006)],
+        "desc": "XGB up-probability >65% and G3B down >0.6% → G3B long",
+        "accuracy": 0.889,
+        "avg_ret": 1.36,
+    },
+]
+
+HYBRID_SHORT_RULES = [
+    {
+        "name": "XGB short + USD up",
+        "conditions": [("xgb_proba", "<", 0.25), ("DX-Y.NYB_ret1", ">", 0.0064)],
+        "desc": "XGB up-probability <25% and DXY up >0.64% → G3B short",
+        "accuracy": 1.000,
+        "avg_ret": -1.59,
+    },
+    {
+        "name": "XGB short + banks weak",
+        "conditions": [("xgb_proba", "<", 0.25), ("bank_w", "<", -0.011)],
+        "desc": "XGB up-probability <25% and weighted banks down >1.1% → G3B short",
+        "accuracy": 1.000,
+        "avg_ret": -2.79,
+    },
+    {
+        "name": "XGB short + STI down",
+        "conditions": [("xgb_proba", "<", 0.25), ("^STI_ret1", "<", -0.0086)],
+        "desc": "XGB up-probability <25% and STI down >0.86% → G3B short",
+        "accuracy": 1.000,
+        "avg_ret": -2.47,
+    },
+]
+
 
 def _check(row: pd.Series, feature: str, op: str, threshold: float) -> bool:
     val = row.get(feature)
@@ -137,7 +242,7 @@ def _check(row: pd.Series, feature: str, op: str, threshold: float) -> bool:
 
 def evaluate_high_conviction(features: pd.Series) -> Optional[HighConvictionSignal]:
     """Return the first matching high-conviction signal, or None."""
-    for rule in LONG_RULES:
+    for rule in LONG_RULES + HYBRID_LONG_RULES:
         if all(_check(features, f, op, th) for f, op, th in rule["conditions"]):
             reasons = [
                 f"{rule['desc']}",
@@ -151,7 +256,7 @@ def evaluate_high_conviction(features: pd.Series) -> Optional[HighConvictionSign
                 reasons=reasons,
                 rule_name=rule["name"],
             )
-    for rule in SHORT_RULES:
+    for rule in SHORT_RULES + HYBRID_SHORT_RULES:
         if all(_check(features, f, op, th) for f, op, th in rule["conditions"]):
             reasons = [
                 f"{rule['desc']}",
@@ -178,6 +283,8 @@ def backtest_high_conviction(
 ) -> Dict[str, any]:
     """Run the high-conviction rule set over a date range and return metrics."""
     feats = build_features(g3b, macro, bank_weight)
+    # XGB probabilities are computed out-of-sample relative to the backtest period.
+    feats["xgb_proba"] = compute_xgb_proba(feats, g3b["Close"], train_cutoff=start)
     mask = (feats.index >= start) & (feats.index <= end)
     feats = feats[mask].copy()
     next_ret = g3b["Close"].pct_change().shift(-1).reindex(feats.index)
