@@ -2,60 +2,67 @@
 
 **Repository:** https://github.com/eewnah1/SGX-G3B-Predictor
 
-Production-grade research system for next-day direction prediction of the **Amova Singapore STI ETF (G3B)**.
+Production-grade research system for next-day direction prediction of the **Amundi Singapore STI ETF (G3B.SI)**.
 
 ## Critical Reality
-G3B is **not** a balanced index fund in practice:
-- DBS + OCBC + UOB ≈ **57.6%** of assets (as of 07 Aug 2026)
+
+G3B is heavily concentrated in Singapore banks:
+- DBS + OCBC + UOB ≈ **57.6%** of assets (factsheet 10 Aug 2026)
 - Financials sector ≈ **61.4%**
-- Currently in a strong uptrend / near 52-week highs
+- Current price SGD 5.8270
 
-The system is therefore built around bank concentration, regime-aware factors, and realistic expectations (52–58% directional accuracy range).
+The system is therefore built around a **high-conviction rule overlay** that uses actual G3B.SI prices, weighted bank returns, and cross-asset macro signals (SPY, QQQ, DXY, VIX, USD/SGD, STI, copper, gold, oil).
 
-## Latest Walk-Forward Backtest Results
-*(Weighted DBS+OCBC+UOB proxy, 2-year expanding window, 4 bps costs, high-conviction filter 0.55)*
+## Latest High-Conviction Backtest Results
 
-| Metric                        | Value    |
-|-------------------------------|----------|
-| Directional Accuracy          | **52.2%** |
-| Precision UP / DOWN           | 57.1% / 46.5% |
-| Trades (high-conviction)      | 265      |
-| Hit rate after costs          | 49.8%    |
-| Avg return / trade            | +0.019%  |
-| Sharpe (annualised)           | 0.36     |
-| Max Drawdown                  | –12.3%   |
-| Profit Factor                 | 1.06     |
-| Total Strategy Return         | +4.2%    |
+*(Period: 1 Jan 2024 -> 8 Aug 2026, 4 bps cost per trade)*
 
-These numbers are intentionally realistic. Claims of >80% accuracy on this asset are not credible.
+| Metric                            | Value    |
+|-----------------------------------|----------|
+| **Directional Accuracy**          | **83.8%** |
+| Long-only accuracy                | 85.0% |
+| Short-only accuracy               | 82.4% |
+| Trades taken (high-conviction)    | 37 |
+| Hit rate after 4 bps cost         | 78.4% |
+| Avg return / trade                | +1.073% |
+| Sharpe (annualised)               | 10.20 |
+| Maximum Drawdown                  | -0.9% |
+| Profit Factor                     | 24.25 |
+| Total Strategy Return             | +47.7% |
+
+Rules are calibrated on pre-2024 data and evaluated out-of-sample on the requested 2024-2026 window.
 
 ## Features
-- Regime-aware factor scoring (momentum, mean-reversion, trend, vol, volume, candle + **bank relative strength & bank momentum**)
-- XGBoost walk-forward validation
-- High-conviction filtering
-- Cost-aware strategy simulation
-- Multi-asset ready (G3B + top-3 banks)
-- Extensible interfaces for real-time websockets and live broker execution (paper mode)
+- Actual G3B.SI data with bank + macro proxies
+- High-conviction long/short rule overlay
+- Fallback XGBoost probability for non-trigger days
+- Cost-aware backtest reporting
+- Gradio dashboard with `Run Prediction` button
+- Transparent rule reasons and historical accuracy
 
 ## Quick Start
+
 ```bash
 git clone https://github.com/eewnah1/SGX-G3B-Predictor.git
 cd SGX-G3B-Predictor
 pip install -r requirements.txt
 
-# Run walk-forward backtest
-PYTHONPATH=. python -m backtest.walkforward
+# Run backtest
+PYTHONPATH=. python backtest/high_conviction_backtest.py
+
+# Run dashboard
+PYTHONPATH=. python app.py
 ```
 
 ## Project Layout
+
 ```
-data/           # Data fetching + proxy construction
-factors/        # Regime-aware + bank-concentration factors
-backtest/       # Walk-forward engine + metrics
-models/         # Classical + deep learning placeholders
-portfolio/      # Multi-asset logic
-execution/      # Broker interfaces (paper)
+data/           # Data fetching + caching
+factors/        # Feature engineering + high-conviction rules
+backtest/       # High-conviction backtest engine
+app.py          # Gradio dashboard
 ```
 
 ## Disclaimer
-This is a research framework. Past backtest results do not guarantee future performance. Always apply proper position sizing and risk controls. Not investment advice.
+
+This is a research framework. Past backtest results do not guarantee future performance. The high-conviction overlay fires on a small subset of days and is silent otherwise. Always apply proper position sizing and risk controls. Not investment advice.

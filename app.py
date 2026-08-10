@@ -15,106 +15,159 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 import gradio as gr
+import numpy as np
+import pandas as pd
+from xgboost import XGBClassifier
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def run_predictor(confidence: float = 0.55) -> str:
+def _base_xgb_direction(features: pd.DataFrame) -> float:
+    """Fallback XGBoost probability for days with no high-conviction rule match."""
     try:
-        from data.data_fetcher import fetch_universe, make_proxy_g3b
-        from factors.factors import compute_all_factors, composite_score, detect_regime
+        df = features.copy()
+        df["target"] = (df["ret1"].shift(-1) > 0).astype(int)
+        model_cols = [c for c in df.columns if c != "target"]
+        train = df.dropna(subset=model_cols + ["target"])
+        if len(train) < 100:
+            return 0.5
+        X = train[model_cols].replace([np.inf, -np.inf], np.nan).fillna(0)
+        y = train["target"]
+        model = XGBClassifier(
+            n_estimators=120,
+            max_depth=3,
+            learning_rate=0.06,
+            subsample=0.85,
+            colsample_bytree=0.8,
+            min_child_weight=4,
+            reg_alpha=0.15,
+            reg_lambda=1.0,
+            random_state=42,
+            n_jobs=2,
+            verbosity=0,
+        )
+        model.fit(X, y)
+        last = df[model_cols].iloc[[-1]].replace([np.inf, -np.inf], np.nan).fillna(0)
+        return float(model.predict_proba(last)[0, 1])
+    except Exception as exc:
+        logger.warning("Base XGB fallback failed: %s", exc)
+        return 0.5
 
-        data = fetch_universe(["D05.SI", "O39.SI", "U11.SI"], period="1y")
-        if len(data) < 2:
-            return "Could not fetch bank data (rate limit). Please try again in a minute."
 
-        price = make_proxy_g3b(data)
-        factors = compute_all_factors(price, data)
-        comp = composite_score(factors)
-        regime = detect_regime(price)
+def run_predictor(cost_bps: float = 4.0) -> str:
+    try:
+        from data.data_fetcher import load_g3b_data, make_bank_weighted_return
+        from factors.high_conviction import (
+            build_features,
+            evaluate_high_conviction,
+        )
+        from backtest.high_conviction_backtest import run_backtest
 
-        last_close = float(price["Close"].iloc[-1])
-        as_of = str(price.index[-1].date())
+        g3b, data = load_g3b_data(period="5y")
+        if g3b is None or g3b.empty:
+            return "Could not fetch G3B data (rate limit). Please try again in a minute."
 
-        if comp >= 0.35:
-            direction, signal, conviction = "UP", "LONG", "HIGH"
-        elif comp <= -0.35:
-            direction, signal, conviction = "DOWN", "SHORT", "HIGH"
+        bank_dfs = {t: df for t, df in data.items() if t in ["D05.SI", "O39.SI", "U11.SI"]}
+        bank_weight = make_bank_weighted_return(bank_dfs)
+        macro = {t: df for t, df in data.items() if t not in ["G3B.SI", "D05.SI", "O39.SI", "U11.SI"]}
+
+        features = build_features(g3b, macro, bank_weight)
+        latest = features.iloc[-1]
+        as_of = str(features.index[-1].date())
+        last_close = float(g3b["Close"].iloc[-1])
+
+        signal = evaluate_high_conviction(latest)
+
+        if signal is None:
+            proba = _base_xgb_direction(features)
+            if proba >= 0.6:
+                direction, confidence = "UP", f"{proba:.1%} (base model)"
+                signal_text = "LONG / BASE MODEL"
+            elif proba <= 0.4:
+                direction, confidence = "DOWN", f"{1 - proba:.1%} (base model)"
+                signal_text = "SHORT / BASE MODEL"
+            else:
+                direction, confidence = "SIDEWAYS", "50.0%"
+                signal_text = "NEUTRAL / NO HIGH-CONVICTION SIGNAL"
+            reasons = [
+                "No high-conviction rule triggered today.",
+                f"Base XGBoost up-probability: {proba:.1%}",
+                "Fading macro/technical conditions — no edge strong enough to override.",
+            ]
+            rule_name = "None"
         else:
-            direction = "UP" if comp > 0 else "DOWN"
-            signal, conviction = "FLAT / NO TRADE", "LOW"
+            if signal.direction == "LONG":
+                direction, signal_text = "UP", "LONG"
+            else:
+                direction, signal_text = "DOWN", "SHORT"
+            confidence = f"{signal.confidence:.1%}"
+            reasons = signal.reasons
+            rule_name = signal.rule_name
+
+        # run backtest for the dashboard summary
+        bt = run_backtest(start="2024-01-01", end="2026-08-08", cost_bps=cost_bps)
 
         lines = [
-            "=" * 50,
+            "=" * 55,
             "  G3B NEXT-DAY PREDICTOR",
-            "=" * 50,
+            "  Amundi Singapore STI ETF (G3B.SI)",
+            "=" * 55,
             f"  As-of date          : {as_of}",
-            f"  Proxy last close    : {last_close:.3f}",
-            f"  Regime              : {regime}",
-            f"  Composite score     : {comp:+.3f}",
+            f"  G3B last close      : SGD {last_close:.4f}",
             f"  Direction bias      : {direction}",
-            f"  Signal              : {signal}",
-            f"  Conviction          : {conviction}",
-            "-" * 50,
-            "  Factor Breakdown:",
+            f"  Signal              : {signal_text}",
+            f"  Rule triggered      : {rule_name}",
+            f"  Confidence          : {confidence}",
+            "-" * 55,
+            "  Reasons:",
         ]
-        for f in factors:
-            lines.append(f"    {f.name:22s}  {f.score:+.2f}   (w={f.weight:.2f})  {f.description}")
+        for r in reasons:
+            lines.append(f"    • {r}")
         lines += [
-            "-" * 50,
-            "  Note: Uses DBS+OCBC+UOB weighted proxy (~57.6% of G3B).",
+            "-" * 55,
+            f"  High-conviction backtest {bt.start} -> {bt.end}",
+            f"    Directional accuracy : {bt.directional_accuracy:6.1%}",
+            f"    Long-only accuracy   : {bt.long_accuracy:6.1%}" if bt.long_accuracy else "",
+            f"    Short-only accuracy  : {bt.short_accuracy:6.1%}" if bt.short_accuracy else "",
+            f"    Trades taken         : {bt.n_trades}",
+            f"    Hit rate after cost  : {bt.hit_rate_after_cost:6.1%}",
+            f"    Avg return / trade   : {bt.avg_return_per_trade:+.3%}",
+            f"    Sharpe (annualised)  : {bt.sharpe:6.2f}",
+            f"    Profit factor        : {bt.profit_factor:6.2f}",
+            f"    Max drawdown         : {bt.max_drawdown:6.1%}",
+            f"    Total return         : {bt.total_return:+.2%}",
+            "-" * 55,
             "  Research signal only — not financial advice.",
             f"  Generated: {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}",
-            "=" * 50,
+            "=" * 55,
         ]
-        return "\n".join(lines)
+        return "\n".join(line for line in lines if line)
 
     except Exception as e:
         logger.exception("Predictor failed")
         return f"Error: {type(e).__name__}: {e}\n\nTry again shortly (Yahoo rate limits are common)."
 
 
-BACKTEST_MD = """
-**Latest Walk-Forward Backtest** (DBS+OCBC+UOB proxy)
-
-| Metric | Value |
-|--------|-------|
-| Directional Accuracy | 52.2% |
-| Precision UP / DOWN | 57.1% / 46.5% |
-| Hit rate after costs | 49.8% |
-| Sharpe | 0.36 |
-| Max Drawdown | -12.3% |
-| Profit Factor | 1.06 |
-| Total Return | +4.2% |
-"""
-
-
-with gr.Blocks(title="G3B Next-Day Predictor") as demo:
-    gr.Markdown(
-        """
-        # G3B Next-Day Predictor
-        Amova Singapore STI ETF — regime-aware factors + bank concentration model
-
-        G3B is ~58% DBS + OCBC + UOB. This dashboard uses a weighted bank proxy.
-        """
-    )
-
-    with gr.Row():
-        conf = gr.Slider(0.50, 0.70, value=0.55, step=0.01, label="Confidence threshold")
-        btn = gr.Button("Run Predictor", variant="primary")
-
-    output = gr.Textbox(label="Prediction Card", lines=20)
-
-    btn.click(fn=run_predictor, inputs=[conf], outputs=output)
-
-    with gr.Accordion("Backtest Results", open=False):
-        gr.Markdown(BACKTEST_MD)
-
-    gr.Markdown(
-        "Repo: [eewnah1/SGX-G3B-Predictor](https://github.com/eewnah1/SGX-G3B-Predictor) · Research only"
-    )
-
-
 if __name__ == "__main__":
+    with gr.Blocks(title="G3B Next-Day Predictor") as demo:
+        gr.Markdown(
+            """
+            # G3B Next-Day Predictor
+            Amundi Singapore STI ETF — high-conviction rule + macro overlay
+
+            G3B is ~58% DBS + OCBC + UOB. This dashboard uses actual G3B.SI prices,
+            weighted bank returns, and cross-asset macro factors.
+            """
+        )
+
+        btn = gr.Button("Run Prediction", variant="primary")
+        output = gr.Textbox(label="Prediction Card", lines=25)
+
+        btn.click(fn=run_predictor, inputs=[], outputs=output)
+
+        gr.Markdown(
+            "Repo: [eewnah1/SGX-G3B-Predictor](https://github.com/eewnah1/SGX-G3B-Predictor) · Research only"
+        )
+
     demo.launch(server_name="0.0.0.0", server_port=7860, share=True)
