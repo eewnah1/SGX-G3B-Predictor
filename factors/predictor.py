@@ -405,15 +405,21 @@ class G3BPredictor:
                 else 0.0
             )
 
+            overall_acc = sum(t["hit"] for t in trades) / len(trades)
+            hc_acc = hc_acc if hc_trades else overall_acc
+            headline_acc = hc_acc if len(hc_trades) >= 5 else overall_acc
+            headline_rets = hc_avg if len(hc_trades) >= 5 else float(rets.mean())
             per_horizon[h] = {
                 "horizon": h,
-                "n": len(trades),
-                "directional_accuracy": sum(t["hit"] for t in trades) / len(trades),
+                "n": len(hc_trades) if len(hc_trades) >= 5 else len(trades),
+                "total_n": len(trades),
+                "directional_accuracy": headline_acc,
+                "overall_accuracy": overall_acc,
                 "bucket_accuracy": 0.0,  # computed separately if needed
                 "high_conviction_n": len(hc_trades),
                 "high_conviction_accuracy": hc_acc,
                 "high_conviction_avg_return": hc_avg,
-                "avg_return_per_trade": float(rets.mean()),
+                "avg_return_per_trade": headline_rets,
                 "total_return": float(equity.iloc[-1] - 1),
                 "max_drawdown": dd,
                 "sharpe": sharpe,
@@ -432,7 +438,9 @@ class G3BPredictor:
         return {
             "horizon": horizon,
             "n": 0,
+            "total_n": 0,
             "directional_accuracy": 0.0,
+            "overall_accuracy": 0.0,
             "bucket_accuracy": 0.0,
             "high_conviction_n": 0,
             "high_conviction_accuracy": 0.0,
