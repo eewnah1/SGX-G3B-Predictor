@@ -324,12 +324,20 @@ def _run_prediction():
         if h1 is not None and hasattr(h1, '__dict__'):
             h1 = vars(h1)
         if h1:
+            pred['ticker'] = 'G3B.SI'
             pred['direction'] = h1.get('direction') or pred.get('direction')
             pred['confidence'] = h1.get('confidence') if h1.get('confidence') is not None else pred.get('confidence')
             pred['bucket_probs'] = h1.get('bucket_probs') or pred.get('bucket_probs')
+            pred['bucket'] = h1.get('bucket') or pred.get('bucket')
             pred['reasons'] = h1.get('reasons') or pred.get('reasons', [])
             pred['top_features'] = h1.get('top_features') or pred.get('top_features_global') or pred.get('top_features', [])
             pred['signal_type'] = h1.get('signal_type') or pred.get('signal_type')
+            bp = h1.get('bucket_probs') or {}
+            proba_up = bp.get('Weak Up', 0) + bp.get('Strong Up', 0) + 0.5 * bp.get('Flat', 0)
+            if not bp:
+                proba_up = h1.get('model_proba_up')
+            pred['proba_up'] = proba_up if proba_up is not None else 0.5
+            pred['proba_down'] = 1 - pred['proba_up']
     def _to_dict(x):
         return vars(x) if hasattr(x, '__dict__') else x
     bt_summary = {'start': _to_dict(bt).get('start'), 'end': _to_dict(bt).get('end'), 'cost_bps': _to_dict(bt).get('cost_bps'), 'generated_at': _to_dict(bt).get('generated_at')}
@@ -341,6 +349,11 @@ def _run_prediction():
             bt_summary['horizons'][h].pop('trades', None)
     else:
         bt_summary['horizons'] = _to_dict(bt).get('horizons')
+    # Headline backtest accuracy uses next-day high-conviction signal accuracy when available.
+    h1 = (bt_summary.get('horizons') or {}).get(1) or (bt_summary.get('horizons') or {}).get('1') or {}
+    bt_summary['accuracy'] = h1.get('high_conviction_accuracy') if h1.get('high_conviction_n', 0) >= 10 else h1.get('directional_accuracy')
+    bt_summary['n_samples'] = h1.get('n') if h1 else 0
+    bt_summary['trades'] = h1.get('high_conviction_n') if h1 else 0
     return {'prediction': pred, 'backtest': bt_summary}
 
 def _get_backtest_summary():
